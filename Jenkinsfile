@@ -13,8 +13,8 @@ pipeline {
   options {
     timestamps()
     buildDiscarder(logRotator(numToKeepStr: '20'))
-    // ✅ 1. Requiere el plugin AnsiColor instalado.
-    ansiColor('xterm')
+    // Comenta ansiColor si no está instalado el plugin
+    // ansiColor('xterm')
   }
 
   stages {
@@ -27,9 +27,12 @@ pipeline {
     }
 
     stage('SAST - Semgrep') {
-      // ✅ CORREGIDO: Se añadió 'agent' envolviendo a 'docker'.
+      // CORRECCIÓN: Usar agent con parámetro docker
       agent {
-        docker { image 'returntocorp/semgrep:latest' }
+        docker {
+          image 'returntocorp/semgrep:latest'
+          reuseNode true
+        }
       }
       steps {
         echo "Running Semgrep (SAST)..."
@@ -47,9 +50,12 @@ pipeline {
     }
 
     stage('SCA - Dependency Check (OWASP dependency-check)') {
-      // ✅ CORREGIDO: Se añadió 'agent' envolviendo a 'docker'.
+      // CORRECCIÓN: Usar agent con parámetro docker
       agent {
-        docker { image 'owasp/dependency-check:latest' }
+        docker {
+          image 'owasp/dependency-check:latest'
+          reuseNode true
+        }
       }
       steps {
         echo "Running SCA / Dependency-Check..."
@@ -96,6 +102,7 @@ pipeline {
       when {
         expression { return env.DOCKER_REGISTRY != null && env.DOCKER_REGISTRY != "" }
       }
+      agent { label 'docker' }
       steps {
         echo "Pushing image to registry ${DOCKER_REGISTRY}..."
         withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
@@ -134,17 +141,32 @@ pipeline {
     }
 
     stage('Policy Check - Fail on HIGH/CRITICAL CVEs') {
-      agent { label 'docker' } // Se añadió 'agent' ya que probablemente necesite Docker o un agente específico.
+      agent { label 'docker' }
       steps {
-        sh '''
-          chmod +x scripts/scan_trivy_fail.sh
-          ./scripts/scan_trivy_fail.sh ${DOCKER_IMAGE_NAME} || exit_code=$?
-          if [ "${exit_code:-0}" -eq 2 ]; then
-            echo "Failing pipeline due to HIGH/CRITICAL vulnerabilities detected by Trivy."
-            // Se usa 'error' de Groovy para forzar el fallo limpio en Jenkins.
+        script {
+          def exitCode = sh(
+            script: '''
+              chmod +x scripts/scan_trivy_fail.sh
+              ./scripts/scan_trivy_fail.sh ${DOCKER_IMAGE_NAME} || exit_code=$?
+              echo "Exit code: ${exit_code:-0}"
+              exit ${exit_code:-0}
+            ''',
+            returnStatus: true
+          )
+          
+          if (exitCode == 2) {
             error "Policy Check FAILED: HIGH/CRITICAL vulnerabilities found by Trivy."
-          fi
-        '''
+          }
+        }
+      }
+    }
+
+    stage('Cleanup') {
+      agent { label 'docker' }
+      steps {
+        echo "Cleaning up staging environment..."
+        sh 'docker-compose -f docker-compose.yml down || true'
+        echo "Staging environment cleaned up."
       }
     }
 
@@ -153,13 +175,6 @@ pipeline {
   post {
     always {
       echo "Pipeline finished. Collecting artifacts..."
-      // Asegurar limpieza del entorno de staging
-      stage('Cleanup') {
-        steps {
-          sh 'docker-compose -f docker-compose.yml down || true'
-          echo "Staging environment cleaned up."
-        }
-      }
     }
     failure {
       echo "Pipeline failed! Check console output for scan results."
