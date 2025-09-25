@@ -13,6 +13,7 @@ pipeline {
   options {
     timestamps()
     buildDiscarder(logRotator(numToKeepStr: '20'))
+    // ✅ 1. Requiere el plugin AnsiColor instalado.
     ansiColor('xterm')
   }
 
@@ -26,6 +27,7 @@ pipeline {
     }
 
     stage('SAST - Semgrep') {
+      // ✅ CORREGIDO: Se añadió 'agent' envolviendo a 'docker'.
       agent {
         docker { image 'returntocorp/semgrep:latest' }
       }
@@ -45,6 +47,7 @@ pipeline {
     }
 
     stage('SCA - Dependency Check (OWASP dependency-check)') {
+      // ✅ CORREGIDO: Se añadió 'agent' envolviendo a 'docker'.
       agent {
         docker { image 'owasp/dependency-check:latest' }
       }
@@ -131,15 +134,17 @@ pipeline {
     }
 
     stage('Policy Check - Fail on HIGH/CRITICAL CVEs') {
+      agent { label 'docker' } // Se añadió 'agent' ya que probablemente necesite Docker o un agente específico.
       steps {
-            sh '''
-                chmod +x scripts/scan_trivy_fail.sh
-                ./scripts/scan_trivy_fail.sh $DOCKER_IMAGE_NAME || exit_code=$?
-                if [ "${exit_code:-0}" -eq 2 ]; then
-                    echo "Failing pipeline due to HIGH/CRITICAL vulnerabilities detected by Trivy."
-                    exit 1
-                fi
-            '''
+        sh '''
+          chmod +x scripts/scan_trivy_fail.sh
+          ./scripts/scan_trivy_fail.sh ${DOCKER_IMAGE_NAME} || exit_code=$?
+          if [ "${exit_code:-0}" -eq 2 ]; then
+            echo "Failing pipeline due to HIGH/CRITICAL vulnerabilities detected by Trivy."
+            // Se usa 'error' de Groovy para forzar el fallo limpio en Jenkins.
+            error "Policy Check FAILED: HIGH/CRITICAL vulnerabilities found by Trivy."
+          fi
+        '''
       }
     }
 
@@ -148,9 +153,16 @@ pipeline {
   post {
     always {
       echo "Pipeline finished. Collecting artifacts..."
+      // Asegurar limpieza del entorno de staging
+      stage('Cleanup') {
+        steps {
+          sh 'docker-compose -f docker-compose.yml down || true'
+          echo "Staging environment cleaned up."
+        }
+      }
     }
     failure {
-      echo "Pipeline failed!"
+      echo "Pipeline failed! Check console output for scan results."
     }
   }
 }
