@@ -130,6 +130,19 @@ pipeline {
       }
     }
 
+    stage('Policy Check - Fail on HIGH/CRITICAL CVEs') {
+      steps {
+            sh '''
+                chmod +x scripts/scan_trivy_fail.sh
+                ./scripts/scan_trivy_fail.sh $DOCKER_IMAGE_NAME || exit_code=$?
+                if [ "${exit_code:-0}" -eq 2 ]; then
+                    echo "Failing pipeline due to HIGH/CRITICAL vulnerabilities detected by Trivy."
+                    exit 1
+                fi
+            '''
+      }
+    }
+
   } // stages
 
   post {
@@ -140,17 +153,4 @@ pipeline {
       echo "Pipeline failed!"
     }
   }
-
-        stage('Policy Check - Fail on HIGH/CRITICAL CVEs') {
-            steps {
-                sh '''
-                    chmod +x scripts/scan_trivy_fail.sh
-                    ./scripts/scan_trivy_fail.sh $DOCKER_IMAGE_NAME || exit_code=$?
-                    if [ "${exit_code:-0}" -eq 2 ]; then
-                        echo "Failing pipeline due to HIGH/CRITICAL vulnerabilities detected by Trivy."
-                        exit 1
-                    fi
-                '''
-            }
-        }
 }
