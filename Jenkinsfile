@@ -69,14 +69,25 @@ pipeline {
     }
 
     stage('Build') {
-      agent any
+      agent {
+        docker {
+          image 'node:18-alpine'
+          reuseNode true
+        }
+      }
       steps {
         echo "Building app (npm install and tests)..."
         sh '''
           cd src
           npm install --no-audit --no-fund
           if [ -f package.json ]; then
-            if npm test --silent; then echo "Tests OK"; else echo "Tests failed (continue)"; fi
+            if npm test --silent; then 
+              echo "Tests OK"
+            else 
+              echo "Tests failed (continue)"
+            fi
+          else
+            echo "No package.json found"
           fi
         '''
       }
@@ -123,10 +134,15 @@ pipeline {
       steps {
         echo "Deploying to staging with docker-compose..."
         sh '''
+          # Primero construir la imagen
+          docker build -t ${DOCKER_IMAGE_NAME} -f Dockerfile .
+          # Luego desplegar
           docker-compose -f docker-compose.yml down || true
-          docker-compose -f docker-compose.yml up -d --build
-          sleep 8
+          docker-compose -f docker-compose.yml up -d
+          sleep 15
           docker ps -a
+          # Verificar que la aplicación esté corriendo
+          curl -f ${STAGING_URL} || echo "Application might still be starting..."
         '''
       }
     }
@@ -137,6 +153,8 @@ pipeline {
         echo "Running DAST (OWASP ZAP) against ${STAGING_URL} ..."
         sh '''
           mkdir -p zap-reports
+          # Esperar a que la aplicación esté completamente lista
+          sleep 30
           docker run --rm --network host -v /var/run/docker.sock:/var/run/docker.sock \
             owasp/zap2docker-stable zap-baseline.py -t ${STAGING_URL} -r zap-reports/zap-report.html || true
         '''
@@ -149,25 +167,25 @@ pipeline {
       steps {
         script {
           try {
-            def exitCode = sh(
-              script: '''
-                chmod +x scripts/scan_trivy_fail.sh 2>/dev/null || true
-                if [ -f scripts/scan_trivy_fail.sh ]; then
+            // Verificar si el script existe
+            if (fileExists('scripts/scan_trivy_fail.sh')) {
+              def exitCode = sh(
+                script: '''
+                  chmod +x scripts/scan_trivy_fail.sh
                   ./scripts/scan_trivy_fail.sh ${DOCKER_IMAGE_NAME} || exit_code=$?
                   echo "Exit code: ${exit_code:-0}"
                   exit ${exit_code:-0}
-                else
-                  echo "Warning: scan_trivy_fail.sh not found, skipping policy check"
-                  exit 0
-                fi
-              ''',
-              returnStatus: true
-            )
-            
-            if (exitCode == 2) {
-              error "Policy Check FAILED: HIGH/CRITICAL vulnerabilities found by Trivy."
-            } else if (exitCode != 0) {
-              echo "Policy check completed with warnings (exit code: ${exitCode})"
+                ''',
+                returnStatus: true
+              )
+              
+              if (exitCode == 2) {
+                error "Policy Check FAILED: HIGH/CRITICAL vulnerabilities found by Trivy."
+              } else if (exitCode != 0) {
+                echo "Policy check completed with warnings (exit code: ${exitCode})"
+              }
+            } else {
+              echo "Warning: scan_trivy_fail.sh not found, skipping policy check"
             }
           } catch (Exception e) {
             echo "Policy check failed with error: ${e.getMessage()}"
@@ -180,7 +198,11 @@ pipeline {
       agent any
       steps {
         echo "Cleaning up staging environment..."
-        sh 'docker-compose -f docker-compose.yml down || true'
+        sh '''
+          docker-compose -f docker-compose.yml down || true
+          # Limpiar imágenes temporales
+          docker image prune -f || true
+        '''
         echo "Staging environment cleaned up."
       }
     }
@@ -190,6 +212,10 @@ pipeline {
   post {
     always {
       echo "Pipeline finished. Collecting artifacts..."
+      archiveArtifacts artifacts: '**/*.json,**/*.html', allowEmptyArchive: true
+    }
+    success {
+      echo "Pipeline completed successfully! Security scans completed."
     }
     failure {
       echo "Pipeline failed! Check console output for scan results."
