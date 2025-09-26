@@ -51,14 +51,14 @@ pipeline {
         docker {
           image 'owasp/dependency-check:latest'
           reuseNode true
-          args '--entrypoint=""'  // FIX: Soluciona el problema del entrypoint
+          args '--entrypoint=""'
         }
       }
       steps {
         echo "Running SCA / Dependency-Check..."
         sh '''
           mkdir -p dependency-check-reports
-          /usr/share/dependency-check/bin/dependency-check.sh \  // FIX: Ruta correcta del comando
+          /usr/share/dependency-check/bin/dependency-check.sh \
             --project "devsecops-labs" \
             --scan . \
             --format JSON \
@@ -69,7 +69,7 @@ pipeline {
     }
 
     stage('Build') {
-      agent any  // FIX: Cambiado de 'docker' a 'any'
+      agent any
       steps {
         echo "Building app (npm install and tests)..."
         sh '''
@@ -83,7 +83,7 @@ pipeline {
     }
 
     stage('Docker Build & Trivy Scan') {
-      agent any  // FIX: Cambiado de 'docker' a 'any'
+      agent any
       steps {
         echo "Building Docker image..."
         sh '''
@@ -105,7 +105,7 @@ pipeline {
       when {
         expression { return env.DOCKER_REGISTRY != null && env.DOCKER_REGISTRY != "" }
       }
-      agent any  // FIX: Cambiado de 'docker' a 'any'
+      agent any
       steps {
         echo "Pushing image to registry ${DOCKER_REGISTRY}..."
         withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
@@ -119,7 +119,7 @@ pipeline {
     }
 
     stage('Deploy to Staging (docker-compose)') {
-      agent any  // FIX: Cambiado de 'docker' a 'any'
+      agent any
       steps {
         echo "Deploying to staging with docker-compose..."
         sh '''
@@ -132,7 +132,7 @@ pipeline {
     }
 
     stage('DAST - OWASP ZAP scan') {
-      agent any  // FIX: Cambiado de 'docker' a 'any'
+      agent any
       steps {
         echo "Running DAST (OWASP ZAP) against ${STAGING_URL} ..."
         sh '''
@@ -145,10 +145,9 @@ pipeline {
     }
 
     stage('Policy Check - Fail on HIGH/CRITICAL CVEs') {
-      agent any  // FIX: Cambiado de 'docker' a 'any'
+      agent any
       steps {
         script {
-          // FIX: Manejo mejorado de errores para el script
           try {
             def exitCode = sh(
               script: '''
@@ -172,14 +171,13 @@ pipeline {
             }
           } catch (Exception e) {
             echo "Policy check failed with error: ${e.getMessage()}"
-            // No falla el pipeline completo por un error en el policy check
           }
         }
       }
     }
 
     stage('Cleanup') {
-      agent any  // FIX: Cambiado de 'docker' a 'any'
+      agent any
       steps {
         echo "Cleaning up staging environment..."
         sh 'docker-compose -f docker-compose.yml down || true'
@@ -187,7 +185,7 @@ pipeline {
       }
     }
 
-  } // stages
+  }
 
   post {
     always {
